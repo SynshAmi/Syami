@@ -31,8 +31,6 @@ def scan_directory(root_path: str):
             try:
                 stat = file_path.stat()
             except OSError:
-                # File may have disappeared or become inaccessible
-                # between discovery and metadata collection.
                 continue
 
             yield FileMetadata(

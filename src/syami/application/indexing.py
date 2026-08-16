@@ -1,5 +1,5 @@
-from .db import get_connection, init_db
-from .scanner import scan_directory
+from syami.infrastructure.database.db import get_connection, init_db
+from syami.infrastructure.filesystem.scanner import scan_directory
 
 
 def index_directory(root_path: str):
