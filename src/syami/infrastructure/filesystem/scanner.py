@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import os
 import time
+from collections.abc import Callable
 
 
 @dataclass
@@ -15,22 +16,58 @@ class FileMetadata:
     indexed_at: float
 
 
-def scan_directory(root_path: str):
+def scan_directory(
+    root_path: str,
+    should_exclude: Callable[[str, bool], bool] | None = None,
+    on_error: Callable[[str, OSError], None] | None = None,
+):
     root = Path(root_path).resolve()
 
     if not root.exists():
-        raise FileNotFoundError(f"Directory does not exist: {root}")
+        raise FileNotFoundError(
+            f"Directory does not exist: {root}"
+        )
 
     if not root.is_dir():
-        raise NotADirectoryError(f"Not a directory: {root}")
+        raise NotADirectoryError(
+            f"Not a directory: {root}"
+        )
 
-    for current_root, _, filenames in os.walk(root):
+    if should_exclude is None:
+        should_exclude = lambda path, is_directory: False
+
+    for current_root, directories, filenames in os.walk(root):
+        current_path = Path(current_root)
+
+        # Remove excluded directories from os.walk's
+        # traversal list so their contents are never visited.
+        directories[:] = [
+            directory
+            for directory in directories
+            if not should_exclude(
+                str(current_path / directory),
+                True,
+            )
+        ]
+
         for filename in filenames:
-            file_path = Path(current_root) / filename
+            file_path = current_path / filename
+
+            if should_exclude(
+                str(file_path),
+                False,
+            ):
+                continue
 
             try:
                 stat = file_path.stat()
-            except OSError:
+            except OSError as error:
+                if on_error is not None:
+                    on_error(
+                        str(file_path),
+                        error,
+                    )
+
                 continue
 
             yield FileMetadata(
