@@ -1,12 +1,12 @@
 from pathlib import Path
 
-from pypdf import PdfReader
+from docx import Document
 
 from syami.application.documents.processor import DocumentProcessor
 from syami.domain.document import ContentUnit, ProcessedDocument
 
 
-class PDFProcessor(DocumentProcessor):
+class DOCXProcessor(DocumentProcessor):
 
     def process(
         self,
@@ -21,31 +21,36 @@ class PDFProcessor(DocumentProcessor):
                 f"File does not exist: {path}"
             )
 
-        if path.suffix.lower() != ".pdf":
+        if path.suffix.lower() != ".docx":
             raise ValueError(
-                f"Expected a PDF file: {path}"
+                f"Expected a DOCX file: {path}"
             )
 
-        reader = PdfReader(path)
+        document = Document(str(path))
 
         units = []
 
-        for index, page in enumerate(reader.pages, start=1):
-            text = page.extract_text()
+        for index, paragraph in enumerate(
+            document.paragraphs,
+            start=1,
+        ):
+            text = paragraph.text.strip()
 
-            if text:
-                units.append(
-                    ContentUnit(
-                        text=text,
-                        unit_type="page",
-                        unit_index=index,
-                    )
+            if not text:
+                continue
+
+            units.append(
+                ContentUnit(
+                    text=text,
+                    unit_type="paragraph",
+                    unit_index=index,
                 )
+            )
 
         return ProcessedDocument(
             document_id=document_id,
             source_path=str(path),
-            document_type="pdf",
+            document_type="docx",
             title=path.stem,
             units=units,
         )
