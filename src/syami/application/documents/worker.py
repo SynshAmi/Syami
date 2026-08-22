@@ -105,3 +105,28 @@ class DocumentProcessingWorker:
             }
 
         return self.process_claimed_documents(claimed_ids)
+
+    def run(
+        self,
+        batch_size: int = 10,
+    ) -> dict[str, int]:
+
+        total_stats = {
+            "claimed": 0,
+            "completed": 0,
+            "unsupported": 0,
+            "failed": 0,
+        }
+
+        while True:
+            batch_stats = self.run_once(batch_size=batch_size)
+
+            if batch_stats["claimed"] == 0:
+                break
+
+            total_stats["claimed"] += batch_stats["claimed"]
+            total_stats["completed"] += batch_stats["completed"]
+            total_stats["unsupported"] += batch_stats["unsupported"]
+            total_stats["failed"] += batch_stats["failed"]
+
+        return total_stats
