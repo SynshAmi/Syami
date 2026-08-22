@@ -52,24 +52,6 @@ class DocumentProcessingService:
                     f"Document not found: {document_id}"
                 )
 
-            connection.execute(
-                """
-                UPDATE documents
-                SET
-                    processing_status = ?,
-                    processing_started_at = ?,
-                    processing_error = NULL
-                WHERE id = ?
-                """,
-                (
-                    ExtractionStatus.PROCESSING.value,
-                    time.time(),
-                    document_id,
-                ),
-            )
-
-            connection.commit()
-
             extension = Path(document["path"]).suffix.lower()
 
             processor = self._processors.get(extension)
