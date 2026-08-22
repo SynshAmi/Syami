@@ -8,14 +8,22 @@ from syami.domain.document import (
 from syami.infrastructure.database.db import get_connection
 from syami.infrastructure.documents.pdf_processor import PDFProcessor
 from syami.infrastructure.documents.docx_processor import DOCXProcessor
+from syami.infrastructure.documents.pptx_processor import PPTXProcessor
+from syami.infrastructure.documents.text_processor import TextProcessor
 
 
 class DocumentProcessingService:
 
     def __init__(self):
+        text_processor = TextProcessor()
+
         self._processors = {
             ".pdf": PDFProcessor(),
             ".docx": DOCXProcessor(),
+            ".pptx": PPTXProcessor(),
+            ".txt": text_processor,
+            ".text": text_processor,
+            ".md": text_processor,
         }
 
     def process_document(
