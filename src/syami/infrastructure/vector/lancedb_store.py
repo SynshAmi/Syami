@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Any
 
 import lancedb
+from lancedb.index import FTS
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -50,6 +51,17 @@ class LanceDBVectorStore:
 
         return None
 
+    def _ensure_fts_index(
+        self,
+        table_name: str,
+        column_name: str = "text",
+    ) -> None:
+        table = self._get_table(table_name)
+        if table is None:
+            return
+
+        table.create_index(column_name, config=FTS(), replace=True)
+
     def _replace_records_in_table(
         self,
         table_name: str,
@@ -80,6 +92,9 @@ class LanceDBVectorStore:
                     batch = records[i:i + write_batch_size]
                     table.add(batch)
 
+        if table_name == self._chunks_table_name and (records or table is not None):
+            self._ensure_fts_index(table_name, column_name="text")
+
     def _delete_records_from_table(
         self,
         table_name: str,
@@ -89,6 +104,9 @@ class LanceDBVectorStore:
 
         if table is not None:
             table.delete(f"document_id = {document_id}")
+
+            if table_name == self._chunks_table_name:
+                self._ensure_fts_index(table_name, column_name="text")
 
     def replace_document(
         self,
@@ -145,4 +163,24 @@ class LanceDBVectorStore:
             self._chunks_table_name,
             document_id,
         )
+
+    def search_text(
+        self,
+        query: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        if not query or not query.strip():
+            return []
+
+        table = self._get_table(self._chunks_table_name)
+        if table is None:
+            return []
+
+        return (
+            table.search(query.strip(), query_type="fts")
+            .limit(limit)
+            .to_list()
+        )
+
+
 
