@@ -1,4 +1,6 @@
+from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 
 class ExtractionStatus(str, Enum):
@@ -7,8 +9,6 @@ class ExtractionStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     UNSUPPORTED = "unsupported"
-
-from dataclasses import dataclass, field
 
 
 @dataclass
@@ -25,3 +25,11 @@ class ProcessedDocument:
     document_type: str
     title: str | None
     units: list[ContentUnit] = field(default_factory=list)
+
+
+@dataclass
+class DocumentChunk:
+    document_id: int
+    chunk_index: int
+    text: str
+    source_metadata: dict[str, Any] = field(default_factory=dict)
