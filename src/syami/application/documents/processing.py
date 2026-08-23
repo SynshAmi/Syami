@@ -95,13 +95,13 @@ class DocumentProcessingService:
 
             chunks = self._chunker.chunk(processed_document)
 
+            chunk_records = []
             if chunks:
                 texts = [c.text for c in chunks]
                 embeddings = self._embedder.embed_chunks(texts)
 
-                records = []
                 for chunk, vector in zip(chunks, embeddings):
-                    records.append({
+                    chunk_records.append({
                         "document_id": document["id"],
                         "chunk_index": chunk.chunk_index,
                         "text": chunk.text,
@@ -114,14 +114,22 @@ class DocumentProcessingService:
                         ),
                     })
 
-                self._vector_store.replace_document_chunks(
-                    document_id=document["id"],
-                    records=records,
-                )
-            else:
-                self._vector_store.delete_document_chunks(
-                    document_id=document["id"]
-                )
+            title = processed_document.title or Path(document["path"]).stem or ""
+            title_vector = self._embedder.embed_text(title)
+
+            document_record = {
+                "document_id": document["id"],
+                "title": title,
+                "title_vector": title_vector,
+                "source_path": processed_document.source_path,
+                "document_type": processed_document.document_type,
+            }
+
+            self._vector_store.replace_document(
+                document_id=document["id"],
+                document_record=document_record,
+                chunk_records=chunk_records,
+            )
 
             connection.execute(
                 """

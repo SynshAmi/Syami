@@ -37,3 +37,14 @@ class SentenceTransformerEmbedder:
         )
 
         return [vector.tolist() for vector in embeddings]
+
+    def embed_text(
+        self,
+        text: str,
+    ) -> list[float]:
+        if not text:
+            return []
+
+        embeddings = self.embed_chunks([text])
+        return embeddings[0] if embeddings else []
+
