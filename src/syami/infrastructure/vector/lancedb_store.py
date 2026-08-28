@@ -17,11 +17,29 @@ class LanceDBVectorStore:
         chunks_table_name: str = "chunks",
         documents_table_name: str = "documents",
         table_name: str | None = None,
+        auto_optimize_threshold: int = 50,
     ):
         self._db_path = Path(db_path)
         self._chunks_table_name = table_name or chunks_table_name
         self._documents_table_name = documents_table_name
+        self._auto_optimize_threshold = auto_optimize_threshold
         self._db: Any | None = None
+
+    def _maybe_auto_optimize(self, table: Any) -> None:
+        if self._auto_optimize_threshold <= 0:
+            return
+
+        try:
+            for index in table.list_indices():
+                if str(getattr(index, "index_type", "")).upper() != "FTS":
+                    continue
+
+                unindexed = getattr(index, "num_unindexed_rows", 0)
+                if unindexed >= self._auto_optimize_threshold:
+                    table.optimize()
+                    return
+        except Exception:
+            pass
 
     def _get_db(self) -> Any:
         if self._db is None:
@@ -32,35 +50,39 @@ class LanceDBVectorStore:
 
     def _get_table(self, table_name: str) -> Any | None:
         db = self._get_db()
-
         try:
-            if hasattr(db, "table_names"):
-                existing = db.table_names()
-            elif hasattr(db, "list_tables"):
-                existing = db.list_tables()
-            else:
-                existing = []
-
-            if table_name in existing:
-                return db.open_table(table_name)
+            return db.open_table(table_name)
         except Exception:
-            try:
-                return db.open_table(table_name)
-            except Exception:
-                return None
+            return None
 
-        return None
+    def _has_fts_index(self, table: Any, column_name: str) -> bool:
+        try:
+            indices = table.list_indices()
+            for idx in indices:
+                cols = getattr(idx, "columns", [])
+                idx_type = str(getattr(idx, "index_type", "")).upper()
+                if column_name in cols and idx_type == "FTS":
+                    return True
+        except Exception:
+            pass
+        return False
 
     def _ensure_fts_index(
         self,
         table_name: str,
-        column_name: str = "text",
+        column_name: str,
     ) -> None:
         table = self._get_table(table_name)
         if table is None:
             return
 
-        table.create_index(column_name, config=FTS(), replace=True)
+        if self._has_fts_index(table, column_name):
+            return
+
+        try:
+            table.create_index(column_name, config=FTS())
+        except Exception:
+            pass
 
     def _replace_records_in_table(
         self,
@@ -92,8 +114,13 @@ class LanceDBVectorStore:
                     batch = records[i:i + write_batch_size]
                     table.add(batch)
 
-        if table_name == self._chunks_table_name and (records or table is not None):
+        if table_name == self._chunks_table_name:
             self._ensure_fts_index(table_name, column_name="text")
+        elif table_name == self._documents_table_name:
+            self._ensure_fts_index(table_name, column_name="title")
+
+        if table is not None:
+            self._maybe_auto_optimize(table)
 
     def _delete_records_from_table(
         self,
@@ -104,9 +131,6 @@ class LanceDBVectorStore:
 
         if table is not None:
             table.delete(f"document_id = {document_id}")
-
-            if table_name == self._chunks_table_name:
-                self._ensure_fts_index(table_name, column_name="text")
 
     def replace_document(
         self,
@@ -164,15 +188,16 @@ class LanceDBVectorStore:
             document_id,
         )
 
-    def search_text(
+    def _search_table(
         self,
+        table_name: str,
         query: str,
         limit: int = 10,
     ) -> list[dict[str, Any]]:
         if not query or not query.strip():
             return []
 
-        table = self._get_table(self._chunks_table_name)
+        table = self._get_table(table_name)
         if table is None:
             return []
 
@@ -182,5 +207,42 @@ class LanceDBVectorStore:
             .to_list()
         )
 
+    def search_titles(
+        self,
+        query: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        return self._search_table(
+            self._documents_table_name,
+            query,
+            limit=limit,
+        )
 
+    def search_text(
+        self,
+        query: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        return self._search_table(
+            self._chunks_table_name,
+            query,
+            limit=limit,
+        )
 
+    def optimize(self, table_name: str | None = None) -> None:
+        """
+        Optimizes dataset files and indices for LanceDB tables (compaction, pruning, and index update).
+        """
+        target_tables = (
+            [table_name]
+            if table_name is not None
+            else [self._documents_table_name, self._chunks_table_name]
+        )
+
+        for name in target_tables:
+            table = self._get_table(name)
+            if table is not None:
+                try:
+                    table.optimize()
+                except Exception:
+                    pass
