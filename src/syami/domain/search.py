@@ -1,6 +1,10 @@
 from dataclasses import dataclass, field
 from enum import Enum
+import os
+from pathlib import Path
+import re
 from typing import Any
+import unicodedata
 
 
 class IdentityKind(str, Enum):
@@ -16,6 +20,37 @@ class IdentityTier(str, Enum):
     EXACT_FILENAME = "exact_filename"
     EXACT_STEM = "exact_stem"
     IDENTIFIER = "identifier"
+
+
+def normalize_filename_key(filename: str) -> str:
+    if not filename:
+        return ""
+    normalized = unicodedata.normalize("NFKC", filename).casefold().strip()
+    return re.sub(r"\s+", " ", normalized)
+
+
+def normalize_stem_key(stem: str) -> str:
+    if not stem:
+        return ""
+    normalized = unicodedata.normalize("NFKC", stem).casefold().strip()
+    cleaned = re.sub(r"[\s_\-\.]+", "_", normalized)
+    return cleaned.strip("_")
+
+
+def normalize_path_key(path: str) -> str:
+    if not path:
+        return ""
+    abs_norm = os.path.normcase(os.path.abspath(path))
+    normalized = unicodedata.normalize("NFKC", abs_norm).strip()
+    return normalized.replace("\\", "/")
+
+
+def generate_identity_keys(file_path: str) -> tuple[str, str, str]:
+    path_obj = Path(file_path)
+    filename_key = normalize_filename_key(path_obj.name)
+    stem_key = normalize_stem_key(path_obj.stem)
+    path_key = normalize_path_key(file_path)
+    return filename_key, stem_key, path_key
 
 
 @dataclass

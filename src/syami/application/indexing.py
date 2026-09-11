@@ -4,7 +4,12 @@ import time
 
 from syami.application.exclusion.policy import ExclusionPolicy
 from syami.domain.document import ExtractionStatus
-from syami.infrastructure.database.db import get_connection, init_db
+from syami.domain.search import generate_identity_keys
+from syami.infrastructure.database.db import (
+    DB_PATH,
+    get_connection,
+    init_db,
+)
 from syami.infrastructure.filesystem.hasher import calculate_file_hash
 from syami.infrastructure.filesystem.scanner import scan_directory
 
@@ -94,12 +99,12 @@ def _find_rename_candidate(
     return None
 
 
-def index_directory(root_path: str):
-    init_db()
+def index_directory(root_path: str, db_path=DB_PATH):
+    init_db(db_path=db_path)
 
     root_path = _normalize_path(root_path)
 
-    connection = get_connection()
+    connection = get_connection(db_path=db_path)
 
     try:
         scope_id = _get_or_create_scope(
@@ -112,7 +117,7 @@ def index_directory(root_path: str):
             scope_id,
         )
 
-        policy = ExclusionPolicy()
+        policy = ExclusionPolicy(db_path=db_path)
         scan_errors = []
 
         def handle_scan_error(path, error):
@@ -131,6 +136,7 @@ def index_directory(root_path: str):
         ):
             try:
                 file.path = _normalize_path(file.path)
+                filename_key, stem_key, path_key = generate_identity_keys(file.path)
 
                 existing = connection.execute(
                     """
@@ -190,6 +196,9 @@ def index_directory(root_path: str):
                                 size = ?,
                                 created_at = ?,
                                 modified_at = ?,
+                                filename_key = ?,
+                                stem_key = ?,
+                                path_key = ?,
                                 last_seen_scan_id = ?
                             WHERE id = ?
                             """,
@@ -199,6 +208,9 @@ def index_directory(root_path: str):
                                 file.size,
                                 file.created_at,
                                 file.modified_at,
+                                filename_key,
+                                stem_key,
+                                path_key,
                                 scan_id,
                                 existing["id"],
                             ),
@@ -225,6 +237,9 @@ def index_directory(root_path: str):
                             processing_error = NULL,
                             processing_started_at = NULL,
                             processed_at = NULL,
+                            filename_key = ?,
+                            stem_key = ?,
+                            path_key = ?,
                             last_seen_scan_id = ?
                         WHERE id = ?
                         """,
@@ -236,6 +251,9 @@ def index_directory(root_path: str):
                             file.modified_at,
                             content_hash,
                             ExtractionStatus.PENDING.value,
+                            filename_key,
+                            stem_key,
+                            path_key,
                             scan_id,
                             existing["id"],
                         ),
@@ -279,6 +297,9 @@ def index_directory(root_path: str):
                             size = ?,
                             created_at = ?,
                             modified_at = ?,
+                            filename_key = ?,
+                            stem_key = ?,
+                            path_key = ?,
                             last_seen_scan_id = ?
                         WHERE id = ?
                         """,
@@ -289,6 +310,9 @@ def index_directory(root_path: str):
                             file.size,
                             file.created_at,
                             file.modified_at,
+                            filename_key,
+                            stem_key,
+                            path_key,
                             scan_id,
                             rename_candidate["id"],
                         ),
@@ -316,9 +340,12 @@ def index_directory(root_path: str):
                         modified_at,
                         content_hash,
                         processing_status,
-                        last_seen_scan_id
+                        last_seen_scan_id,
+                        filename_key,
+                        stem_key,
+                        path_key
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         file.path,
@@ -330,6 +357,9 @@ def index_directory(root_path: str):
                         content_hash,
                         ExtractionStatus.PENDING.value,
                         scan_id,
+                        filename_key,
+                        stem_key,
+                        path_key,
                     ),
                 )
 

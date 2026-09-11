@@ -1,5 +1,6 @@
-import sqlite3
 from pathlib import Path
+import sqlite3
+from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -98,10 +99,25 @@ def init_db(db_path=DB_PATH):
             processed_at REAL,
             last_seen_scan_id INTEGER,
 
+            filename_key TEXT,
+            stem_key TEXT,
+            path_key TEXT,
+
             FOREIGN KEY (last_seen_scan_id)
                 REFERENCES scan_sessions(id)
         )
     """)
+
+    # Backward-compatible schema evolution for existing databases
+    cursor = connection.execute("PRAGMA table_info(documents)")
+    existing_columns = {row["name"] for row in cursor.fetchall()}
+
+    if "filename_key" not in existing_columns:
+        connection.execute("ALTER TABLE documents ADD COLUMN filename_key TEXT")
+    if "stem_key" not in existing_columns:
+        connection.execute("ALTER TABLE documents ADD COLUMN stem_key TEXT")
+    if "path_key" not in existing_columns:
+        connection.execute("ALTER TABLE documents ADD COLUMN path_key TEXT")
 
     connection.execute("""
         CREATE INDEX IF NOT EXISTS idx_scan_sessions_scope_id
@@ -113,5 +129,135 @@ def init_db(db_path=DB_PATH):
         ON documents(last_seen_scan_id)
     """)
 
+    connection.execute("""
+        CREATE INDEX IF NOT EXISTS idx_documents_filename_key
+        ON documents(filename_key)
+    """)
+
+    connection.execute("""
+        CREATE INDEX IF NOT EXISTS idx_documents_stem_key
+        ON documents(stem_key)
+    """)
+
+    connection.execute("""
+        CREATE INDEX IF NOT EXISTS idx_documents_path_key
+        ON documents(path_key)
+    """)
+
     connection.commit()
     connection.close()
+
+
+def get_documents_by_filename_key(
+    connection: sqlite3.Connection,
+    filename_key: str,
+    limit: int = 25,
+) -> list[sqlite3.Row]:
+    if not filename_key:
+        return []
+    return connection.execute(
+        """
+        SELECT *
+        FROM documents
+        WHERE filename_key = ?
+        LIMIT ?
+        """,
+        (filename_key, limit),
+    ).fetchall()
+
+
+def get_documents_by_stem_key(
+    connection: sqlite3.Connection,
+    stem_key: str,
+    limit: int = 25,
+) -> list[sqlite3.Row]:
+    if not stem_key:
+        return []
+    return connection.execute(
+        """
+        SELECT *
+        FROM documents
+        WHERE stem_key = ?
+        LIMIT ?
+        """,
+        (stem_key, limit),
+    ).fetchall()
+
+
+def get_documents_by_path_key(
+    connection: sqlite3.Connection,
+    path_key: str,
+    limit: int = 25,
+) -> list[sqlite3.Row]:
+    if not path_key:
+        return []
+    return connection.execute(
+        """
+        SELECT *
+        FROM documents
+        WHERE path_key = ?
+        LIMIT ?
+        """,
+        (path_key, limit),
+    ).fetchall()
+
+
+def get_documents_by_ids(
+    connection: sqlite3.Connection,
+    document_ids: list[int],
+) -> dict[int, sqlite3.Row]:
+    if not document_ids:
+        return {}
+    placeholders = ",".join("?" for _ in document_ids)
+    rows = connection.execute(
+        f"""
+        SELECT *
+        FROM documents
+        WHERE id IN ({placeholders})
+        """,
+        tuple(document_ids),
+    ).fetchall()
+    return {row["id"]: row for row in rows}
+
+
+def get_metadata_candidates(
+    connection: sqlite3.Connection,
+    extension: str | None = None,
+    min_modified_at: float | None = None,
+    max_modified_at: float | None = None,
+    min_size: int | None = None,
+    max_size: int | None = None,
+    path_prefix: str | None = None,
+    limit: int = 100,
+) -> list[sqlite3.Row]:
+    clauses = ["1=1"]
+    params: list[Any] = []
+
+    if extension is not None:
+        clauses.append("extension = ?")
+        params.append(extension.lower())
+    if min_modified_at is not None:
+        clauses.append("modified_at >= ?")
+        params.append(min_modified_at)
+    if max_modified_at is not None:
+        clauses.append("modified_at <= ?")
+        params.append(max_modified_at)
+    if min_size is not None:
+        clauses.append("size >= ?")
+        params.append(min_size)
+    if max_size is not None:
+        clauses.append("size <= ?")
+        params.append(max_size)
+    if path_prefix is not None:
+        clauses.append("path_key LIKE ?")
+        params.append(f"{path_prefix.lower()}%")
+
+    params.append(limit)
+    query = f"""
+        SELECT *
+        FROM documents
+        WHERE {' AND '.join(clauses)}
+        ORDER BY modified_at DESC
+        LIMIT ?
+    """
+    return connection.execute(query, tuple(params)).fetchall()
