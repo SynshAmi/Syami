@@ -152,6 +152,165 @@ class TestQueryPlanner(unittest.TestCase):
         plan2 = self.planner.plan(query)
         self.assertEqual(plan1, plan2)
 
+    # -------------------------------------------------------------
+    # 10 Focused Planner Requirement Tests
+    # -------------------------------------------------------------
+
+    def test_req1_broad_topic_plus_one_remembered_question(self):
+        """1. Broad topic + one remembered question."""
+        query = "distributed systems notes mentioning 'how does Paxos consensus work'"
+        plan = self.planner.plan(query)
+        self.assertEqual(plan.topical_text, "distributed systems")
+        self.assertEqual(plan.semantic_text, "distributed systems")
+        self.assertEqual(plan.quoted_phrases, ["how does Paxos consensus work"])
+        self.assertEqual(len(plan.identity_probes), 0)
+        self.assertEqual(len(plan.metadata_predicates), 0)
+
+    def test_req2_broad_topic_plus_multiple_remembered_questions(self):
+        """2. Broad topic + multiple remembered questions."""
+        query = "Machine learning guide with 'what is gradient descent' and 'explain backpropagation'"
+        plan = self.planner.plan(query)
+        self.assertEqual(plan.topical_text, "Machine learning guide")
+        self.assertEqual(plan.semantic_text, "Machine learning guide")
+        self.assertEqual(
+            plan.quoted_phrases,
+            ["what is gradient descent", "explain backpropagation"],
+        )
+        self.assertEqual(len(plan.identity_probes), 0)
+        self.assertEqual(len(plan.metadata_predicates), 0)
+
+    def test_req3_pdf_metadata_topic_multiple_clues(self):
+        """3. PDF metadata + topic + multiple clues."""
+        query = "PDF on database internals mentioning 'b-tree index' and 'write-ahead logging'"
+        plan = self.planner.plan(query)
+        self.assertEqual(len(plan.metadata_predicates), 1)
+        self.assertEqual(plan.metadata_predicates[0].field, "extension")
+        self.assertEqual(plan.metadata_predicates[0].canonical_value, ".pdf")
+        self.assertEqual(plan.topical_text, "database internals")
+        self.assertEqual(plan.semantic_text, "database internals")
+        self.assertEqual(
+            plan.quoted_phrases,
+            ["b-tree index", "write-ahead logging"],
+        )
+        self.assertEqual(len(plan.identity_probes), 0)
+
+    def test_req4_pure_topical_query_no_clues(self):
+        """4. Pure topical query with no remembered clues."""
+        query = "Kalman filter state estimation algorithm"
+        plan = self.planner.plan(query)
+        self.assertEqual(plan.topical_text, "Kalman filter state estimation algorithm")
+        self.assertEqual(plan.semantic_text, "Kalman filter state estimation algorithm")
+        self.assertEqual(plan.quoted_phrases, [])
+        self.assertEqual(len(plan.identity_probes), 0)
+        self.assertEqual(len(plan.metadata_predicates), 0)
+        self.assertEqual(plan.mode, SearchMode.STANDARD)
+
+    def test_req5_query_containing_only_remembered_questions(self):
+        """5. Query containing only remembered questions."""
+        query = "Find documents containing 'what is IOC in Spring'"
+        plan = self.planner.plan(query)
+        self.assertEqual(plan.topical_text, "what is IOC in Spring")
+        self.assertEqual(plan.semantic_text, "what is IOC in Spring")
+        self.assertEqual(plan.quoted_phrases, ["what is IOC in Spring"])
+        self.assertEqual(len(plan.identity_probes), 0)
+
+    def test_req6_date_filetype_metadata_mixed_with_topic(self):
+        """6. Date/file-type metadata mixed with topical text."""
+        query = "PDF modified yesterday about quantum computing"
+        plan = self.planner.plan(query)
+        ext_preds = [p for p in plan.metadata_predicates if p.field == "extension"]
+        date_preds = [p for p in plan.metadata_predicates if p.field == "modified_at"]
+        self.assertEqual(len(ext_preds), 1)
+        self.assertEqual(ext_preds[0].canonical_value, ".pdf")
+        self.assertEqual(len(date_preds), 1)
+        self.assertEqual(date_preds[0].operator, "between")
+        self.assertEqual(plan.topical_text, "quantum computing")
+        self.assertEqual(plan.semantic_text, "quantum computing")
+        self.assertEqual(len(plan.identity_probes), 0)
+
+    def test_req7_duplicate_remembered_clues(self):
+        """7. Duplicate remembered clues."""
+        query = "Python tutorial mentioning 'list comprehension' and 'list comprehension'"
+        plan = self.planner.plan(query)
+        self.assertEqual(plan.topical_text, "Python tutorial")
+        self.assertEqual(plan.semantic_text, "Python tutorial")
+        self.assertEqual(plan.quoted_phrases, ["list comprehension"])
+
+    def test_req8_quoted_clues_punctuation_and_capitalization_differences(self):
+        """8. Quoted clues with punctuation and capitalization differences."""
+        query = "Guide with 'What is Dependency Injection?' and 'what is dependency injection?'"
+        plan = self.planner.plan(query)
+        self.assertEqual(plan.topical_text, "Guide")
+        self.assertEqual(plan.semantic_text, "Guide")
+        # Deduplication case-insensitively preserves the first occurrence
+        self.assertEqual(plan.quoted_phrases, ["What is Dependency Injection?"])
+
+    def test_req9_identity_only_query_no_semantic_text(self):
+        """9. Identity-only query, ensuring semantic_text does not become the filename/path."""
+        plan_fn = self.planner.plan("Transformers Notes.pdf")
+        self.assertEqual(plan_fn.mode, SearchMode.IDENTITY_DOMINANT)
+        self.assertIsNone(plan_fn.topical_text)
+        self.assertIsNone(plan_fn.semantic_text)
+        self.assertTrue(len(plan_fn.identity_probes) > 0)
+
+        plan_path = self.planner.plan("C:/docs/report.pdf")
+        self.assertEqual(plan_path.mode, SearchMode.IDENTITY_DOMINANT)
+        self.assertIsNone(plan_path.topical_text)
+        self.assertIsNone(plan_path.semantic_text)
+        self.assertTrue(len(plan_path.identity_probes) > 0)
+
+    def test_req10_java_top_50_interview_questions_canonical_example(self):
+        """10. The existing 'Java top 50 interview questions' example."""
+        query = (
+            "Find the PDF in which content was about Java top 50 interview questions. "
+            "It had some questions about 'what is IOC in Spring', 'what is dependency injection', "
+            "and 'what is the difference between JDK, JRE and JVM'."
+        )
+        plan = self.planner.plan(query)
+
+        # Metadata
+        ext_preds = [p for p in plan.metadata_predicates if p.field == "extension"]
+        self.assertEqual(len(ext_preds), 1)
+        self.assertEqual(ext_preds[0].canonical_value, ".pdf")
+
+        # Broad topical and semantic text
+        self.assertEqual(plan.topical_text, "Java top 50 interview questions")
+        self.assertEqual(plan.semantic_text, "Java top 50 interview questions")
+
+        # Quoted lexical clues
+        self.assertEqual(
+            plan.quoted_phrases,
+            [
+                "what is IOC in Spring",
+                "what is dependency injection",
+                "what is the difference between JDK, JRE and JVM",
+            ],
+        )
+
+        # Identity probes: none for this query
+        self.assertEqual(len(plan.identity_probes), 0)
+
+        # Mode
+        self.assertEqual(plan.mode, SearchMode.STANDARD)
+
+        # Smart quotes test version of the same query
+        query_smart = (
+            "Find the PDF in which content was about Java top 50 interview questions. "
+            "It had some questions about ‘what is IOC in Spring’, ‘what is dependency injection’, "
+            "and ‘what is the difference between JDK, JRE and JVM’."
+        )
+        plan_smart = self.planner.plan(query_smart)
+        self.assertEqual(plan_smart.topical_text, "Java top 50 interview questions")
+        self.assertEqual(plan_smart.semantic_text, "Java top 50 interview questions")
+        self.assertEqual(
+            plan_smart.quoted_phrases,
+            [
+                "what is IOC in Spring",
+                "what is dependency injection",
+                "what is the difference between JDK, JRE and JVM",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

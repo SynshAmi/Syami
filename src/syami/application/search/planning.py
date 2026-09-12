@@ -87,6 +87,28 @@ class QueryPlanner:
         r"^(?:find\s+(?:me\s+)?|search\s+(?:for\s+)?|look\s+(?:for\s+)?|show\s+(?:me\s+)?|locate\s+|get\s+(?:me\s+)?|where\s+is\s+)",
     ]
 
+    CONVERSATIONAL_SCAFFOLDING_PATTERNS = [
+        r"\bin\s+which\s+(?:the\s+)?content\s+was\s+about\b",
+        r"\bwhere\s+(?:the\s+)?content\s+was\s+about\b",
+        r"\b(?:the\s+)?content\s+was\s+about\b",
+        r"\b(?:the\s+)?content\s+is\s+about\b",
+        r"\b(?:it\s+)?had\s+some\s+questions\s+about\b",
+        r"\b(?:it\s+)?had\s+questions\s+about\b",
+        r"\b(?:it\s+)?has\s+some\s+questions\s+about\b",
+        r"\b(?:it\s+)?has\s+questions\s+about\b",
+        r"\bsome\s+questions\s+about\b",
+        r"\bquestions\s+about\b",
+        r"\bquestions\s+like\b",
+        r"\btopics\s+like\b",
+        r"\b(?:it\s+)?mentions\b",
+        r"\b(?:it\s+)?discusses\b",
+        r"\b(?:it\s+)?talks\s+about\b",
+        r"\bwhich\s+contains\b",
+        r"\bwhich\s+has\b",
+        r"\bcontaining\b",
+        r"\bwith\s+questions\b",
+    ]
+
     UNRESOLVED_TEMPORAL_PATTERNS = [
         r"\blast\s+semester\b",
         r"\bthis\s+semester\b",
@@ -112,6 +134,8 @@ class QueryPlanner:
         "locate",
         "item",
         "items",
+        "and",
+        "or",
     }
 
     def __init__(self, reference_time: float | None = None):
@@ -134,21 +158,17 @@ class QueryPlanner:
 
         original_text = raw_query
         normalized_text = unicodedata.normalize("NFKC", raw_query).strip()
+        for ch in ('\u201c', '\u201d', '\u201e', '\u201f', '\u00ab', '\u00bb'):
+            normalized_text = normalized_text.replace(ch, '"')
+        for ch in ('\u2018', '\u2019', '\u201a', '\u201b', '`', '\u00b4'):
+            normalized_text = normalized_text.replace(ch, "'")
 
         diagnostics: list[str] = []
-        quoted_phrases: list[str] = []
         identity_probes: list[IdentityProbe] = []
         metadata_predicates: list[MetadataPredicate] = []
 
-        # 1. Extract quoted phrases
-        extracted_quotes = re.findall(r'["\']([^"\']+)["\']', normalized_text)
-        for quote in extracted_quotes:
-            q_clean = quote.strip()
-            if q_clean:
-                quoted_phrases.append(q_clean)
-
-        # Working text for extraction and stripping
-        working_text = normalized_text
+        # 1. Extract and deduplicate quoted phrases / specific remembered clues
+        quoted_phrases, working_text = self._extract_quoted_phrases(normalized_text)
 
         # 2. Check for overall hedging in query
         is_hedged_query = any(
@@ -177,8 +197,10 @@ class QueryPlanner:
             working_text, metadata_predicates, is_hedged_query, diagnostics
         )
 
-        # 6. Clean up working text into topical/semantic text
-        topical_text, semantic_text = self._extract_topical_text(working_text)
+        # 6. Clean up working text into broad topical / semantic text
+        topical_text, semantic_text = self._extract_topical_text(
+            working_text, quoted_phrases
+        )
 
         # 7. Determine Mode and Implied Sort
         mode, implied_sort = self._determine_mode_and_sort(
@@ -186,7 +208,13 @@ class QueryPlanner:
             identity_probes,
             metadata_predicates,
             topical_text,
+            quoted_phrases,
         )
+
+        # 8. If pure identity-dominant query, ensure semantic_text does not leak filename/path
+        if mode == SearchMode.IDENTITY_DOMINANT:
+            topical_text = None
+            semantic_text = None
 
         return SearchQueryPlan(
             original_text=original_text,
@@ -200,6 +228,23 @@ class QueryPlanner:
             implied_sort=implied_sort,
             diagnostics=diagnostics,
         )
+
+    def _extract_quoted_phrases(self, text: str) -> tuple[list[str], str]:
+        extracted_quotes = re.findall(r'["\']([^"\']+)["\']', text)
+        seen: set[str] = set()
+        deduped_quotes: list[str] = []
+        for quote in extracted_quotes:
+            q_clean = quote.strip()
+            if not q_clean:
+                continue
+            key = q_clean.casefold()
+            if key not in seen:
+                seen.add(key)
+                deduped_quotes.append(q_clean)
+
+        # Remove quoted spans from working text so they don't pollute broad topical text
+        unquoted_text = re.sub(r'["\'][^"\']+["\']', ' ', text)
+        return deduped_quotes, unquoted_text
 
     def _extract_identity_probes(
         self,
@@ -596,13 +641,30 @@ class QueryPlanner:
 
         return text
 
-    def _extract_topical_text(self, text: str) -> tuple[str | None, str | None]:
+    def _extract_topical_text(
+        self,
+        text: str,
+        quoted_phrases: list[str],
+    ) -> tuple[str | None, str | None]:
         cleaned = text
+
+        # 1. Strip command prefixes
         for pat in self.COMMAND_PREFIXES:
             cleaned = re.sub(pat, " ", cleaned, flags=re.IGNORECASE)
 
+        # 2. Strip conversational scaffolding patterns
+        for pat in self.CONVERSATIONAL_SCAFFOLDING_PATTERNS:
+            cleaned = re.sub(pat, " ", cleaned, flags=re.IGNORECASE)
+
+        # 3. Strip hedging patterns
+        for pat in self.HEDGING_PATTERNS:
+            cleaned = re.sub(pat, " ", cleaned, flags=re.IGNORECASE)
+
+        # 4. Strip single prepositions & scaffolding connectors
         scaffolding_words = [
             r"\babout\b",
+            r"\bon\b",
+            r"\bregarding\b",
             r"\bdiscussing\b",
             r"\brelated\s+to\b",
             r"\bmentioning\b",
@@ -619,32 +681,50 @@ class QueryPlanner:
             r"\bdocument\b",
             r"\bdocuments\b",
             r"\bnotes\b",
+            r"\bwhich\b",
+            r"\bhad\b",
+            r"\bhas\b",
+            r"\bhave\b",
+            r"\bsome\b",
+            r"\bit\b",
+            r"\bwas\b",
+            r"\bis\b",
+            r"\band\b",
+            r"\bor\b",
+            r"\bwhere\b",
+            r"\bfrom\b",
+            r"\bcontent\b",
         ]
 
-        semantic_candidate = re.sub(r'["\']', '', cleaned).strip()
-        semantic_candidate = re.sub(r'\s+', ' ', semantic_candidate).strip(" ,.-_")
-
         topical_candidate = cleaned
-        for pat in self.HEDGING_PATTERNS:
-            topical_candidate = re.sub(pat, " ", topical_candidate, flags=re.IGNORECASE)
         for pat in scaffolding_words:
             topical_candidate = re.sub(pat, " ", topical_candidate, flags=re.IGNORECASE)
 
+        # Clean punctuation and extra spaces
         topical_candidate = re.sub(r'["\']', '', topical_candidate).strip()
-        topical_candidate = re.sub(r'\s+', ' ', topical_candidate).strip(" ,.-_")
+        topical_candidate = re.sub(r'[\.\,\;\:\?\!\-\_]', ' ', topical_candidate)
+        topical_candidate = re.sub(r'\s+', ' ', topical_candidate).strip()
 
-        # Check if the words in candidate are exclusively generic/scaffolding
-        semantic_words = set(semantic_candidate.lower().split()) if semantic_candidate else set()
-        if not semantic_candidate or len(semantic_candidate) < 2 or semantic_words.issubset(self.GENERIC_ENTITIES):
-            return None, None
-
+        # Check if remaining words are purely generic filler
         topical_words = set(topical_candidate.lower().split()) if topical_candidate else set()
-        if not topical_candidate or len(topical_candidate) < 2 or topical_words.issubset(self.GENERIC_ENTITIES):
-            topical_text = semantic_candidate
-        else:
-            topical_text = topical_candidate
+        has_informative_words = bool(
+            topical_candidate
+            and len(topical_candidate) >= 2
+            and not topical_words.issubset(self.GENERIC_ENTITIES)
+        )
 
-        return topical_text, semantic_candidate
+        if has_informative_words:
+            topical_text = topical_candidate
+            semantic_text = topical_candidate
+            return topical_text, semantic_text
+
+        # If no broad topic words remain, but quoted phrases exist:
+        # use the remembered quoted clues as topical/semantic input
+        if quoted_phrases:
+            combined_clues = " ".join(quoted_phrases)
+            return combined_clues, combined_clues
+
+        return None, None
 
     def _determine_mode_and_sort(
         self,
@@ -652,17 +732,18 @@ class QueryPlanner:
         identity_probes: list[IdentityProbe],
         metadata_predicates: list[MetadataPredicate],
         topical_text: str | None,
+        quoted_phrases: list[str],
     ) -> tuple[SearchMode, ImpliedSort | None]:
         # 1. Explicit Recent/Browsing Mode
         if re.search(r"\b(?:recent|recently\s+modified|latest|newest)\s+(?:files?|documents?)?\b", normalized_text, re.IGNORECASE):
             return SearchMode.RECENT, ImpliedSort.RECENCY
 
-        # 2. Identity-Dominant: if query is solely a path or filename
-        if identity_probes and (not topical_text or any(topical_text.lower() == p.raw_value.lower() for p in identity_probes)):
+        # 2. Identity-Dominant: if query is solely a path or filename without other topical content
+        if identity_probes and (not topical_text or not quoted_phrases and any(topical_text.lower() == p.raw_value.lower() for p in identity_probes)):
             return SearchMode.IDENTITY_DOMINANT, ImpliedSort.RELEVANCE
 
-        # 3. Metadata-Dominant: metadata predicates exist with no topical text
-        if metadata_predicates and not topical_text:
+        # 3. Metadata-Dominant: metadata predicates exist with no topical text or quoted phrases
+        if metadata_predicates and not topical_text and not quoted_phrases:
             if any(p.field == "modified_at" for p in metadata_predicates):
                 return SearchMode.METADATA_DOMINANT, ImpliedSort.RECENCY
             if any(p.field == "size" for p in metadata_predicates):
