@@ -351,7 +351,11 @@ src/syami/application/search/
 
 Implement deterministic normalization.
 
-Do not modify the user's original text.
+- NFKC unicode normalization.
+- Smart / curly quote normalization (`“ ” ‘ ’ « »` mapped to standard ASCII quotes).
+- Whitespace stripping.
+
+Do not modify the user's original text (`original_text` remains untouched).
 
 Preserve enough source information for evidence spans.
 
@@ -374,16 +378,20 @@ path > filename > stem
 
 rule.
 
+For pure identity-dominant queries (e.g. `Transformers Notes.pdf` or `C:/docs/report.pdf`):
+- `identity_probes` are populated.
+- `topical_text = None` and `semantic_text = None` (preventing filenames/paths from polluting vector search).
+
 ## 2.3 Metadata recognition
 
 Support V1 deterministic forms for:
 
 - extension/type
-- modified time
+- modified time (including relative dates such as `today`, `yesterday`, `this week`, `last week`, `this month`, `last year`)
 - created time
 - file time
 - size
-- path cues
+- path cues (folder containment)
 
 Support explicit restrictive wording such as:
 
@@ -413,40 +421,65 @@ Do not use confidence as a probability.
 
 ## 2.5 Topical and semantic text
 
-Produce:
+Produce clean, topic-focused:
 
 ```text
 topical_text
 semantic_text
 ```
 
-Do not aggressively rewrite the query.
+- Strip command prefixes (`find me`, `search for`, etc.).
+- Strip conversational scaffolding patterns (e.g. `in which content was about`, `had some questions about`, `discusses`, `talks about`).
+- Strip conversational connectors, prepositions, and generic entity words (`about`, `on`, `regarding`, `the`, `file`, `document`, etc.).
+- Isolate the broad topic without conversational filler or command scaffolding.
+- Exclude quoted spans from the broad topical candidate.
+- Fall back to remembered clues for topical/semantic retrieval input when the query is clue-only (no distinct broad topic keywords).
+- If topical text exists, all four topical channels remain eligible.
 
-If topical text exists, all four topical channels remain eligible.
+## 2.6 Quoted phrases and multiple remembered clues
 
-## 2.6 Quoted phrases
+Extract quoted phrases safely:
 
-Extract quoted phrases safely.
+- Support zero, one, or multiple remembered content clues.
+- Case-insensitive deduplication (preserving the casing of the first occurrence).
+- Remove quoted spans from working text during broad topic extraction.
+- Quoted phrases are used for lexical retrieval and exact-match verification.
+- Do not make content phrases identity evidence.
 
-They may be used for lexical retrieval and exact-match verification.
+## 2.7 Canonical Example: Broad Topic + Multiple Clues + Metadata
 
-Do not make content phrases identity evidence.
+Example query:
 
-## 2.7 Mode / implied sort
+> *"Find the PDF in which content was about Java top 50 interview questions. It had some questions about ‘what is IOC in Spring’, ‘what is dependency injection’, and ‘what is the difference between JDK, JRE and JVM’."*
+
+The planner produces:
+
+* **Metadata**: `extension = .pdf` (confidence: MEDIUM, enforcement: STRICT_PREFERRED)
+* **Broad topical text**: `Java top 50 interview questions`
+* **Semantic text**: `Java top 50 interview questions`
+* **Specific lexical clues**:
+  * `what is IOC in Spring`
+  * `what is dependency injection`
+  * `what is the difference between JDK, JRE and JVM`
+* **Identity probes**: `[]` (none)
+* **Mode**: `SearchMode.STANDARD`
+
+## 2.8 Mode / implied sort
 
 Support deterministic modes where justified.
 
 Examples:
 
-- metadata-dominant query
-- recent-file browsing if explicitly requested
-- size-oriented query
+- `IDENTITY_DOMINANT`: query is purely a path or filename without separate topical content
+- `METADATA_DOMINANT`: metadata predicates exist with no topical text or quoted phrases
+- `RECENT`: explicit recent-file browsing (`recent files`, `latest documents`)
+- `STANDARD`: standard multi-channel search
 
 Do not invent a mode from vague wording.
 
-## 2.8 Diagnostics
+## 2.9 Diagnostics
 
-Record parser ambiguities or unresolved metadata.
+Record parser ambiguities or unresolved metadata (e.g. `last semester`, empty queries).
 
 ## Acceptance Criteria
 
@@ -455,12 +488,22 @@ Unit tests cover:
 - filename extraction
 - stem extraction
 - path recognition
-- quoted phrases
+- single and multiple quoted phrases / remembered questions
+- case-insensitive clue deduplication
+- smart / curly quote normalization
+- broad topic + single clue
+- broad topic + multiple clues
+- PDF metadata + topic + multiple clues
+- pure topical query (no clues)
+- clue-only query (fallback to clues for semantic text)
+- date/file-type metadata mixed with topical text
+- identity-only query (`semantic_text = None`)
+- canonical Java top 50 interview questions example
 - explicit type predicates
 - strict-preferred metadata
 - soft-only metadata
 - unresolved date language
-- topical text extraction
+- topical text extraction and conversational scaffolding stripping
 - metadata-dominant query planning
 
 The planner is deterministic and contains no external I/O.
@@ -485,6 +528,7 @@ Expose typed operations for:
 
 - title lexical search
 - content lexical search
+- support for zero, one, or multiple lexical clue queries (searching each clue in content FTS) and merging results at document level
 
 Support optional LanceDB `where` filters.
 
@@ -635,6 +679,8 @@ Preserve:
 - rank
 
 Multiple chunks from the same document must not generate multiple RRF votes.
+
+Multiple distinct remembered clues (e.g. 3 distinct questions in a query) may contribute bounded accumulated evidence, but repeated matches of the exact same clue across multiple chunks in a single document must not be treated as multiple independent clues.
 
 ## 4.3 RRF
 
@@ -820,10 +866,12 @@ Generate deterministic evidence for:
 
 - identity
 - title lexical
-- content lexical
+- content lexical (including which specific remembered clues matched)
 - title semantic
 - content semantic
 - metadata
+
+Results should eventually be able to explicitly show which remembered clues matched, where supported by the evidence model.
 
 Keep evidence tied to actual retrieved data.
 
@@ -916,6 +964,14 @@ Categories:
 
 - exact content phrase
 - distinctive title words
+
+### Multiple / Remembered Clues
+
+- broad topic + multiple remembered questions
+- partial clue matches (some remembered clues match in document, some do not)
+- duplicate remembered clues in query
+- clue-only queries (no broad topic, only remembered questions)
+- topic + file type + multiple remembered clues (e.g. Java top 50 interview questions PDF)
 
 ### Semantic
 
