@@ -1,6 +1,7 @@
 import logging
 import os
 import time
+from typing import Any
 
 from syami.application.exclusion.policy import ExclusionPolicy
 from syami.domain.document import ExtractionStatus
@@ -99,7 +100,11 @@ def _find_rename_candidate(
     return None
 
 
-def index_directory(root_path: str, db_path=DB_PATH):
+def index_directory(
+    root_path: str,
+    db_path=DB_PATH,
+    vector_store: Any | None = None,
+):
     init_db(db_path=db_path)
 
     root_path = _normalize_path(root_path)
@@ -318,6 +323,16 @@ def index_directory(root_path: str, db_path=DB_PATH):
                         ),
                     )
 
+                    if vector_store is not None:
+                        vector_store.update_document_metadata(
+                            rename_candidate["id"],
+                            {
+                                "source_path": file.path,
+                                "title": file.filename,
+                                "document_type": file.extension.lstrip(".").lower(),
+                            },
+                        )
+
                     logger.info(
                         "Detected rename/move: %s → %s",
                         rename_candidate["path"],
@@ -410,6 +425,23 @@ def index_directory(root_path: str, db_path=DB_PATH):
         # Successful scan:
         # documents from this scope not seen during this scan are gone.
         # -------------------------------------------------------------
+        deleted_docs = connection.execute(
+            """
+            SELECT id
+            FROM documents
+            WHERE last_seen_scan_id != ?
+              AND last_seen_scan_id IN (
+                  SELECT id
+                  FROM scan_sessions
+                  WHERE scope_id = ?
+              )
+            """,
+            (
+                scan_id,
+                scope_id,
+            ),
+        ).fetchall()
+
         connection.execute(
             """
             DELETE FROM documents
@@ -425,6 +457,10 @@ def index_directory(root_path: str, db_path=DB_PATH):
                 scope_id,
             ),
         )
+
+        if vector_store is not None and deleted_docs:
+            for doc in deleted_docs:
+                vector_store.delete_document(doc["id"])
 
         connection.execute(
             """

@@ -48,3 +48,12 @@ class SentenceTransformerEmbedder:
         embeddings = self.embed_chunks([text])
         return embeddings[0] if embeddings else []
 
+    def embed_query(
+        self,
+        text: str,
+    ) -> list[float]:
+        """
+        Embed a query string for vector retrieval using the query embedding boundary.
+        Produces a normalized 384-dimensional embedding vector.
+        """
+        return self.embed_text(text)

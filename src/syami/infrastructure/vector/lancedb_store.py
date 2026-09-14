@@ -188,6 +188,121 @@ class LanceDBVectorStore:
             document_id,
         )
 
+    def update_document_metadata(
+        self,
+        document_id: int,
+        metadata_updates: dict[str, Any],
+    ) -> None:
+        """
+        Updates metadata projections for a document across documents and chunks tables
+        without re-embedding.
+        """
+        if not metadata_updates:
+            return
+
+        for table_name in (self._documents_table_name, self._chunks_table_name):
+            table = self._get_table(table_name)
+            if table is not None:
+                schema_fields = set(table.schema.names)
+                applicable_updates = {
+                    k: v for k, v in metadata_updates.items() if k in schema_fields
+                }
+                if applicable_updates:
+                    table.update(
+                        where=f"document_id = {int(document_id)}",
+                        values=applicable_updates,
+                    )
+
+    def search_titles_lexical(
+        self,
+        query: str,
+        limit: int = 10,
+        filter_expr: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Executes lexical/FTS search over the documents table on the 'title' column.
+        """
+        if not query or not query.strip():
+            return []
+
+        table = self._get_table(self._documents_table_name)
+        if table is None:
+            return []
+
+        builder = table.search(query.strip(), query_type="fts")
+        if filter_expr:
+            builder = builder.where(filter_expr)
+
+        return builder.limit(limit).to_list()
+
+    def search_content_lexical(
+        self,
+        query: str,
+        limit: int = 10,
+        filter_expr: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Executes lexical/FTS search over the chunks table on the 'text' column.
+        Preserves document_id and chunk_index.
+        """
+        if not query or not query.strip():
+            return []
+
+        table = self._get_table(self._chunks_table_name)
+        if table is None:
+            return []
+
+        builder = table.search(query.strip(), query_type="fts")
+        if filter_expr:
+            builder = builder.where(filter_expr)
+
+        return builder.limit(limit).to_list()
+
+    def search_titles_vector(
+        self,
+        vector: list[float],
+        limit: int = 10,
+        filter_expr: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Executes vector search over the documents table explicitly using 'title_vector'.
+        """
+        if not vector:
+            return []
+
+        table = self._get_table(self._documents_table_name)
+        if table is None:
+            return []
+
+        builder = table.search(vector, vector_column_name="title_vector")
+        if filter_expr:
+            builder = builder.where(filter_expr)
+
+        return builder.limit(limit).to_list()
+
+    def search_content_vector(
+        self,
+        vector: list[float],
+        limit: int = 10,
+        filter_expr: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Executes vector search over the chunks table using 'vector'.
+        Preserves document_id and chunk_index.
+        """
+        if not vector:
+            return []
+
+        table = self._get_table(self._chunks_table_name)
+        if table is None:
+            return []
+
+        builder = table.search(vector, vector_column_name="vector")
+        if filter_expr:
+            builder = builder.where(filter_expr)
+
+        return builder.limit(limit).to_list()
+
     def _search_table(
         self,
         table_name: str,
@@ -212,8 +327,7 @@ class LanceDBVectorStore:
         query: str,
         limit: int = 10,
     ) -> list[dict[str, Any]]:
-        return self._search_table(
-            self._documents_table_name,
+        return self.search_titles_lexical(
             query,
             limit=limit,
         )
@@ -223,8 +337,7 @@ class LanceDBVectorStore:
         query: str,
         limit: int = 10,
     ) -> list[dict[str, Any]]:
-        return self._search_table(
-            self._chunks_table_name,
+        return self.search_content_lexical(
             query,
             limit=limit,
         )
